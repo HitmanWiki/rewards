@@ -65,7 +65,18 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-    <script src="https://cdn.jsdelivr.net/npm/@walletconnect/web3-provider@1.9.1/dist/umd/index.min.js"></script>
+
+    <!-- WalletConnect v0.7.28 from specified CDN with fallback -->
+    <script
+        src="https://cdn.jsdelivr.net/npm/walletconnect-web3-provider@0.7.28/dist/walletconnect-web3-provider.min.js"></script>
+    <script>
+        if (typeof WalletConnectProvider === 'undefined') {
+            document.write('<script src="https://unpkg.com/walletconnect-web3-provider@0.7.28/dist/umd/index.min.js"><\/script>');
+        }
+    </script>
+
+    <!-- QR Code Modal (required by WalletConnect) -->
+    <script src="https://unpkg.com/@walletconnect/qrcode-modal@0.9.7/dist/umd/index.min.js"></script>
 
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
@@ -157,7 +168,6 @@
                             throw new Error('MetaMask not detected. Please install the extension or use WalletConnect.');
                         }
 
-                        // Check if already connected
                         const accounts = await window.ethereum.request({ method: 'eth_accounts' });
                         if (accounts.length === 0) {
                             await window.ethereum.request({ method: 'eth_requestAccounts' });
@@ -169,15 +179,16 @@
 
                     } else if (selectedProvider === 'walletconnect') {
                         if (typeof WalletConnectProvider === 'undefined') {
-                            throw new Error('WalletConnect provider not loaded');
+                            throw new Error('WalletConnect provider not loaded. Please refresh the page.');
                         }
 
-                        const walletConnectProvider = new WalletConnectProvider({
+                        const walletConnectProvider = new WalletConnectProvider.default({
                             rpc: {
                                 8453: baseInfuraUrl,
                                 1: "https://mainnet.infura.io/v3/d1d90e62ee284811874e2a0a737ed963"
                             },
-                            chainId: 8453,
+                            bridge: "https://bridge.walletconnect.org",
+                            qrcode: true,
                             qrcodeModalOptions: {
                                 mobileLinks: ["metamask", "trust", "rainbow", "argent"],
                                 desktopLinks: ["metamask"],

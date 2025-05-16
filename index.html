@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATM Rewards Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .skeleton {
+            background-color: #374151;
+            -webkit-mask: linear-gradient(90deg, transparent, #374151, transparent);
+            mask: linear-gradient(90deg, transparent, #374151, transparent);
+            background-size: 200% 100%;
+            animation: skeleton-loading 1.5s infinite linear;
+        }
+
+        @keyframes skeleton-loading {
+            0% {
+                background-position: 0 0;
+            }
+
+            100% {
+                background-position: -200% 0;
+            }
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            animation: slideIn 0.5s forwards, fadeOut 0.5s forwards 3s;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+            }
+
+            to {
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeOut {
+            from {
+                opacity: 1;
+            }
+
+            to {
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-gray-900 text-white font-inter">
+    <div id="root"></div>
+
+    <!-- Load required libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://cdn.jsdelivr.net/npm/@walletconnect/web3-provider@1.9.1/dist/umd/index.min.js"></script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        const getChainId = (networkName) => {
+            switch (networkName.toLowerCase()) {
+                case 'base': return 8453;
+                case 'mainnet': return 1;
+                default: return 8453;
+            }
+        };
+
+        const Notification = ({ message, type }) => {
+            return (
+                <div className={`notification p-4 rounded-md shadow-lg ${type === 'success' ? 'bg-green-800 border-green-700' : 'bg-red-800 border-red-700'
+                    }`}>
+                    <div className="flex items-center">
+                        {type === 'success' ? (
+                            <i className="fas fa-check-circle mr-2"></i>
+                        ) : (
+                            <i className="fas fa-exclamation-circle mr-2"></i>
+                        )}
+                        <span>{message}</span>
+                    </div>
+                </div>
+            );
+        };
+
+        const RewardsComponent = () => {
+            const [provider, setProvider] = useState(null);
+            const [signer, setSigner] = useState(null);
+            const [atmContract, setAtmContract] = useState(null);
+            const [rewardContract, setRewardContract] = useState(null);
+            const [userAddress, setUserAddress] = useState('');
+            const [atmBalance, setAtmBalance] = useState('');
+            const [rewardBalance, setRewardBalance] = useState('');
+            const [unclaimedRewards, setUnclaimedRewards] = useState('');
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [rewardTokenName, setRewardTokenName] = useState('');
+            const [rewardTokenSymbol, setRewardTokenSymbol] = useState('');
+            const [rewardTokenDecimals, setRewardTokenDecimals] = useState(0);
+            const [walletConnected, setWalletConnected] = useState(false);
+            const [pendingRewards, setPendingRewards] = useState(0);
+            const [claimedRewards, setClaimedRewards] = useState(0);
+            const [nextClaimTime, setNextClaimTime] = useState(0);
+            const [minPeriod, setMinPeriod] = useState(420);
+            const [networkName, setNetworkName] = useState('base');
+            const [chainId, setChainId] = useState(getChainId(networkName));
+            const [walletProviderType, setWalletProviderType] = useState(null);
+            const [notifications, setNotifications] = useState([]);
+            const baseInfuraUrl = 'https://base-mainnet.infura.io/v3/d1d90e62ee284811874e2a0a737ed963';
+
+            const atmABI = [
+                "function balanceOf(address account) external view returns (uint256)",
+                "function decimals() external view returns (uint8)",
+                "function getUnpaidEarnings(address account) external view returns (uint256)",
+                "function _claimDividend() external",
+                "function totalRewardsDistributed(address account) external view returns (uint256)",
+                "function getNextClaimTime(address account) external view returns (uint256)"
+            ];
+
+            const rewardTokenABI = [
+                "function name() external view returns (string memory)",
+                "function symbol() external view returns (string memory)",
+                "function balanceOf(address account) external view returns (uint256)",
+                "function decimals() external view returns (uint8)"
+            ];
+
+            const atmContractAddress = '0x88807fDabF60fdDd7bd8fB4987dC5A63cbd31f6a';
+            const rewardTokenAddress = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+
+            const addNotification = (message, type = 'success') => {
+                const id = Date.now();
+                setNotifications(prev => [...prev, { id, message, type }]);
+                setTimeout(() => {
+                    setNotifications(prev => prev.filter(n => n.id !== id));
+                }, 3500);
+            };
+
+            const initProvider = useCallback(async (selectedProvider = 'metamask') => {
+                let ethersProvider;
+                try {
+                    setLoading(true);
+                    setError(null);
+
+                    if (selectedProvider === 'metamask') {
+                        if (!window.ethereum) {
+                            throw new Error('MetaMask not detected. Please install the extension or use WalletConnect.');
+                        }
+
+                        // Check if already connected
+                        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+                        if (accounts.length === 0) {
+                            await window.ethereum.request({ method: 'eth_requestAccounts' });
+                        }
+
+                        ethersProvider = new ethers.providers.Web3Provider(window.ethereum);
+                        setWalletProviderType('metamask');
+                        addNotification('MetaMask connected successfully');
+
+                    } else if (selectedProvider === 'walletconnect') {
+                        if (typeof WalletConnectProvider === 'undefined') {
+                            throw new Error('WalletConnect provider not loaded');
+                        }
+
+                        const walletConnectProvider = new WalletConnectProvider({
+                            rpc: {
+                                8453: baseInfuraUrl,
+                                1: "https://mainnet.infura.io/v3/d1d90e62ee284811874e2a0a737ed963"
+                            },
+                            chainId: 8453,
+                            qrcodeModalOptions: {
+                                mobileLinks: ["metamask", "trust", "rainbow", "argent"],
+                                desktopLinks: ["metamask"],
+                                walletImages: {
+                                    metamask: "https://metamask.io/images/favicon-32x32.png",
+                                    trust: "https://trustwallet.com/assets/images/favicon.png"
+                                }
+                            }
+                        });
+
+                        await walletConnectProvider.enable();
+                        ethersProvider = new ethers.providers.Web3Provider(walletConnectProvider);
+                        setWalletProviderType('walletconnect');
+                        addNotification('WalletConnect connected successfully');
+                    } else {
+                        throw new Error('Invalid wallet provider selected');
+                    }
+
+                    setProvider(ethersProvider);
+                    return ethersProvider;
+
+                } catch (err) {
+                    console.error("Wallet connection error:", err);
+                    setError(err.message);
+                    addNotification(err.message, 'error');
+                    setWalletConnected(false);
+                    return null;
+                } finally {
+                    setLoading(false);
+                }
+            }, []);
+
+            const initSigner = useCallback(async (ethersProvider) => {
+                if (!ethersProvider) return null;
+                try {
+                    const signer = ethersProvider.getSigner();
+                    const address = await signer.getAddress();
+                    setSigner(signer);
+                    setUserAddress(address);
+                    setWalletConnected(true);
+                    return signer;
+                } catch (err) {
+                    console.error("Signer init error:", err);
+                    setError("Failed to get wallet address");
+                    addNotification("Failed to connect wallet", 'error');
+                    setLoading(false);
+                    return null;
+                }
+            }, []);
+
+            const initContracts = useCallback(async (signerInstance) => {
+                if (!signerInstance) return;
+
+                try {
+                    const atm = new ethers.Contract(atmContractAddress, atmABI, signerInstance);
+                    const reward = new ethers.Contract(rewardTokenAddress, rewardTokenABI, signerInstance);
+
+                    setAtmContract(atm);
+                    setRewardContract(reward);
+
+                    const [rName, rSymbol, rDecimals] = await Promise.all([
+                        reward.name(),
+                        reward.symbol(),
+                        reward.decimals()
+                    ]);
+
+                    setRewardTokenName(rName);
+                    setRewardTokenSymbol(rSymbol);
+                    setRewardTokenDecimals(rDecimals);
+
+                    return { atm, reward };
+                } catch (err) {
+                    console.error("Contract init error:", err);
+                    setError("Failed to initialize contracts");
+                    addNotification("Failed to initialize contracts", 'error');
+                    return null;
+                }
+            }, []);
+
+            const fetchData = useCallback(async (atm, reward) => {
+                if (!atm || !reward || !userAddress) return;
+
+                setLoading(true);
+                try {
+                    const [
+                        atmBal,
+                        rewardBal,
+                        rewards,
+                        claimed,
+                        nextClaim
+                    ] = await Promise.all([
+                        atm.balanceOf(userAddress),
+                        reward.balanceOf(userAddress),
+                        atm.getUnpaidEarnings(userAddress).catch(() => ethers.BigNumber.from(0)),
+                        atm.totalRewardsDistributed(userAddress).catch(() => ethers.BigNumber.from(0)),
+                        atm.getNextClaimTime(userAddress).catch(() => ethers.BigNumber.from(0))
+                    ]);
+
+                    setAtmBalance(ethers.utils.formatUnits(atmBal, await atm.decimals()));
+                    setRewardBalance(ethers.utils.formatUnits(rewardBal, rewardTokenDecimals));
+                    setUnclaimedRewards(ethers.utils.formatUnits(rewards, rewardTokenDecimals));
+                    setPendingRewards(ethers.utils.formatUnits(rewards, rewardTokenDecimals));
+                    setClaimedRewards(ethers.utils.formatUnits(claimed, rewardTokenDecimals));
+                    setNextClaimTime(nextClaim.toNumber());
+                    setError(null);
+                } catch (err) {
+                    console.error("Data fetch error:", err);
+                    setError("Failed to fetch data. Please try again.");
+                    addNotification("Failed to fetch data", 'error');
+                } finally {
+                    setLoading(false);
+                }
+            }, [userAddress, rewardTokenDecimals]);
+
+            useEffect(() => {
+                const initialize = async () => {
+                    if (walletConnected && provider) {
+                        const signerInstance = await initSigner(provider);
+                        if (signerInstance) {
+                            const contracts = await initContracts(signerInstance);
+                            if (contracts) {
+                                await fetchData(contracts.atm, contracts.reward);
+                            }
+                        }
+                    }
+                };
+                initialize();
+            }, [walletConnected, provider, initSigner, initContracts, fetchData]);
+
+            useEffect(() => {
+                const checkConnection = async () => {
+                    if (window.ethereum) {
+                        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+                        if (accounts.length > 0) {
+                            const ethersProvider = new ethers.providers.Web3Provider(window.ethereum);
+                            setProvider(ethersProvider);
+                            setWalletProviderType('metamask');
+                            const signerInstance = ethersProvider.getSigner();
+                            setSigner(signerInstance);
+                            setUserAddress(accounts[0]);
+                            setWalletConnected(true);
+                            addNotification('Wallet reconnected automatically');
+                        }
+                    }
+                };
+                checkConnection();
+            }, []);
+
+            const connectWallet = async (providerType) => {
+                setLoading(true);
+                setError(null);
+                try {
+                    const ethersProvider = await initProvider(providerType);
+                    if (ethersProvider) {
+                        await initSigner(ethersProvider);
+                    }
+                } catch (err) {
+                    setError(err.message);
+                    addNotification(err.message, 'error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const disconnectWallet = async () => {
+                try {
+                    if (walletProviderType === 'walletconnect' && provider?.provider?.disconnect) {
+                        await provider.provider.disconnect();
+                    }
+                    setProvider(null);
+                    setSigner(null);
+                    setAtmContract(null);
+                    setRewardContract(null);
+                    setUserAddress('');
+                    setWalletConnected(false);
+                    setWalletProviderType(null);
+                    setError(null);
+                    addNotification('Wallet disconnected');
+                } catch (err) {
+                    console.error("Disconnect error:", err);
+                    setError("Failed to disconnect wallet");
+                    addNotification("Failed to disconnect wallet", 'error');
+                }
+            };
+
+            const handleClaimRewards = async () => {
+                if (!atmContract) {
+                    setError('Contract not initialized');
+                    addNotification('Contract not initialized', 'error');
+                    return;
+                }
+                try {
+                    setLoading(true);
+                    const tx = await atmContract._claimDividend();
+                    addNotification('Transaction submitted. Waiting for confirmation...');
+                    await tx.wait();
+                    addNotification(`Successfully claimed ${unclaimedRewards} ${rewardTokenSymbol}!`);
+
+                    if (atmContract && rewardContract && userAddress) {
+                        await fetchData(atmContract, rewardContract);
+                    }
+                } catch (err) {
+                    console.error("Claim error:", err);
+                    setError(err.message || "Failed to claim rewards");
+                    addNotification(err.message || "Failed to claim rewards", 'error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8">
+                    {/* Notifications */}
+                    {notifications.map(notification => (
+                        <Notification
+                            key={notification.id}
+                            message={notification.message}
+                            type={notification.type}
+                        />
+                    ))}
+
+                    <div className="max-w-4xl mx-auto space-y-6">
+                        <h1 className="text-3xl sm:text-4xl font-bold text-center bg-gradient-to-r from-blue-400 to-purple-500 text-transparent bg-clip-text">
+                            ATM Rewards Dashboard
+                        </h1>
+
+                        {error && (
+                            <div className="bg-red-900/90 border-red-700 text-red-200 p-4 rounded-md mb-4">
+                                <p className="text-red-400">{error}</p>
+                            </div>
+                        )}
+
+                        {!walletConnected ? (
+                            <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
+                                <button
+                                    onClick={() => connectWallet('metamask')}
+                                    className="bg-gradient-to-r from-blue-500 to-purple-500 text-white py-3 px-6 rounded-md hover:from-blue-600 hover:to-purple-600 transition-colors shadow-lg hover:shadow-xl flex items-center"
+                                >
+                                    <i className="fab fa-ethereum mr-2"></i>Connect MetaMask
+                                </button>
+                                <button
+                                    onClick={() => connectWallet('walletconnect')}
+                                    className="bg-gradient-to-r from-green-500 to-teal-500 text-white py-3 px-6 rounded-md hover:from-green-600 hover:to-teal-600 transition-colors shadow-lg hover:shadow-xl flex items-center"
+                                >
+                                    <i className="fas fa-wallet mr-2"></i>Connect WalletConnect
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="text-center">
+                                <button
+                                    onClick={disconnectWallet}
+                                    className="bg-gray-700 hover:bg-gray-600 text-white py-3 px-6 rounded-md transition-colors shadow-lg flex items-center mx-auto"
+                                >
+                                    <i className="fas fa-sign-out-alt mr-2"></i>Disconnect Wallet
+                                </button>
+                            </div>
+                        )}
+
+                        {loading && walletConnected && (
+                            <div className="space-y-4">
+                                <div className="skeleton h-10 w-full rounded-md"></div>
+                                <div className="skeleton h-8 w-3/4 rounded-md"></div>
+                                <div className="skeleton h-8 w-3/4 rounded-md"></div>
+                                <div className="skeleton h-12 w-full rounded-md"></div>
+                            </div>
+                        )}
+
+                        {walletConnected && !loading && (
+                            <div className="space-y-6">
+                                <div className="bg-gray-800 border-gray-700 shadow-lg rounded-md p-6">
+                                    <h2 className="text-xl sm:text-2xl font-semibold text-white mb-4">
+                                        Wallet Information
+                                    </h2>
+                                    <div className="text-gray-300 space-y-2">
+                                        <div>
+                                            <span className="font-medium">Your Address:</span>
+                                            <span className="font-mono text-sm break-all ml-2 text-gray-400">{userAddress}</span>
+                                        </div>
+                                        <div>
+                                            <span className="font-medium">ATM Balance:</span>
+                                            <span className="ml-2 text-green-400">{atmBalance} ATM</span>
+                                        </div>
+                                        <div>
+                                            <span className="font-medium">{rewardTokenName} Balance:</span>
+                                            <span className="ml-2 text-blue-400">{rewardBalance} {rewardTokenSymbol}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-gray-800 border-gray-700 shadow-lg rounded-md p-6">
+                                    <h2 className="text-xl sm:text-2xl font-semibold text-white mb-4">
+                                        Rewards
+                                    </h2>
+                                    <div className="text-gray-300 space-y-4">
+                                        <div>
+                                            <span className="font-medium">Unclaimed Rewards:</span>
+                                            <span className={Number(unclaimedRewards) > 0 ? "ml-2 text-yellow-400" : "ml-2 text-gray-400"}>
+                                                {Number(unclaimedRewards) > 0 ? unclaimedRewards : '0'} {rewardTokenSymbol}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="font-medium">Pending Rewards:</span>
+                                            <span className="ml-2 text-yellow-400">
+                                                {pendingRewards} {rewardTokenSymbol}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="font-medium">Claimed Rewards:</span>
+                                            <span className="ml-2 text-green-400">
+                                                {claimedRewards} {rewardTokenSymbol}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="font-medium">Next Claim Time:</span>
+                                            <span className={nextClaimTime > 0 ? "ml-2 text-red-400" : "ml-2 text-gray-400"}>
+                                                {nextClaimTime > 0
+                                                    ? new Date(nextClaimTime * 1000).toLocaleString()
+                                                    : "Ready to Claim"}
+                                            </span>
+                                        </div>
+                                        <button
+                                            onClick={handleClaimRewards}
+                                            disabled={loading || Number(unclaimedRewards) <= 0 || nextClaimTime > Date.now() / 1000}
+                                            className={`w-full bg-gradient-to-r from-purple-500 to-blue-500 text-white py-3 sm:py-4
+                                            rounded-md hover:from-purple-600 hover:to-blue-600 transition-colors
+                                            disabled:opacity-50 disabled:cursor-not-allowed
+                                            shadow-lg hover:shadow-xl flex items-center justify-center`}
+                                        >
+                                            {loading ? (
+                                                <>
+                                                    <i className="fas fa-spinner fa-spin mr-2"></i>
+                                                    Processing...
+                                                </>
+                                            ) : (
+                                                `Claim ${unclaimedRewards} ${rewardTokenSymbol}`
+                                            )}
+                                        </button>
+                                        <div className="text-gray-400 text-sm">
+                                            <span className="font-medium">Note:</span> Rewards are distributed in {rewardTokenName} ({rewardTokenSymbol}).
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<RewardsComponent />, document.getElementById('root'));
+    </script>
+</body>
+
+</html>

@@ -54,6 +54,13 @@
                 opacity: 0;
             }
         }
+
+        @media (max-width: 640px) {
+            .wallet-button {
+                width: 100%;
+                margin-bottom: 12px;
+            }
+        }
     </style>
 </head>
 
@@ -111,17 +118,27 @@
 
             const usdcABI = [
                 "function balanceOf(address account) external view returns (uint256)",
-                "function decimals() external view returns (uint8)",
-                "function name() external view returns (string memory)",
-                "function symbol() external view returns (string memory)"
+                "function decimals() external view returns (uint8)"
             ];
 
             const atmContractAddress = '0x88807fDabF60fdDd7bd8fB4987dC5A63cbd31f6a';
             const usdcContractAddress = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // USDC on Base
 
+            // Check if mobile device
+            const isMobile = () => {
+                return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            };
+
+            // Check if MetaMask is installed (desktop)
+            const isMetaMaskInstalled = () => {
+                return !!window.ethereum && window.ethereum.isMetaMask;
+            };
+
             // Check if Phantom is available
             const isPhantomAvailable = () => {
-                return !!window.phantom?.ethereum || !!window.ethereum?.isPhantom;
+                return !!window.phantom?.ethereum ||
+                    !!window.ethereum?.isPhantom ||
+                    (isMobile() && window.solana?.isPhantom);
             };
 
             // Add notification helper
@@ -133,22 +150,30 @@
                 }, 3500);
             };
 
-            // Connect with MetaMask
+            // Connect with MetaMask - handles both mobile and desktop
             const connectMetaMask = async () => {
                 try {
                     setLoading(true);
                     setError(null);
 
-                    if (!window.ethereum) {
-                        throw new Error('MetaMask not detected. Please install the extension.');
+                    // Mobile handling
+                    if (isMobile() && !isMetaMaskInstalled()) {
+                        // MetaMask mobile deep link
+                        window.location.href = `https://metamask.app.link/dapp/${window.location.host}${window.location.pathname}`;
+                        return;
                     }
 
-                    // Check if Phantom is overriding window.ethereum
-                    if (window.ethereum.isPhantom) {
-                        throw new Error('Phantom detected. Please connect with Phantom instead.');
+                    // Desktop handling
+                    if (!isMetaMaskInstalled()) {
+                        throw new Error(isMobile() ?
+                            'Please open in MetaMask browser' :
+                            'MetaMask extension not detected');
                     }
 
-                    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                    const accounts = await window.ethereum.request({
+                        method: 'eth_requestAccounts'
+                    });
+
                     const ethersProvider = new ethers.providers.Web3Provider(window.ethereum);
                     const signer = ethersProvider.getSigner();
                     const address = await signer.getAddress();
@@ -179,34 +204,70 @@
                 }
             };
 
-            // Connect with Phantom
+            // Connect with Phantom - handles both mobile and desktop
             const connectPhantom = async () => {
                 try {
                     setLoading(true);
                     setError(null);
 
-                    if (!isPhantomAvailable()) {
-                        throw new Error('Phantom wallet not detected or Ethereum support not enabled.');
+                    // Mobile handling
+                    if (isMobile()) {
+                        if (window.solana?.isPhantom) {
+                            // Mobile with Phantom app installed
+                            const provider = window.solana;
+                            await provider.connect();
+
+                            // For Ethereum-compatible dapps
+                            if (window.ethereum?.isPhantom) {
+                                const accounts = await window.ethereum.request({
+                                    method: 'eth_requestAccounts'
+                                });
+                                const ethersProvider = new ethers.providers.Web3Provider(window.ethereum);
+                                const signer = ethersProvider.getSigner();
+                                const address = await signer.getAddress();
+
+                                setProvider(ethersProvider);
+                                setSigner(signer);
+                                setUserAddress(address);
+                                setWalletProviderType('phantom');
+
+                                // Initialize contracts
+                                const atm = new ethers.Contract(atmContractAddress, atmABI, signer);
+                                const usdc = new ethers.Contract(usdcContractAddress, usdcABI, signer);
+
+                                setAtmContract(atm);
+                                setUsdcContract(usdc);
+
+                                await fetchData(atm, usdc, address);
+                                addNotification('Phantom connected successfully');
+                                return;
+                            }
+
+                            throw new Error('Please enable Ethereum in Phantom settings');
+                        } else {
+                            // Mobile without Phantom app - deep link
+                            if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+                                window.location.href = 'https://phantom.app/ul/browse/' +
+                                    encodeURIComponent(window.location.href) +
+                                    '?ref=' + encodeURIComponent(window.location.host);
+                            } else {
+                                window.location.href = 'https://phantom.app/download';
+                            }
+                            return;
+                        }
                     }
 
-                    // Get the correct provider instance
+                    // Desktop handling
+                    if (!isPhantomAvailable()) {
+                        throw new Error('Phantom wallet not detected');
+                    }
+
                     const phantomProvider = window.phantom?.ethereum ||
                         (window.ethereum?.isPhantom ? window.ethereum : null);
 
-                    if (!phantomProvider) {
-                        throw new Error('Could not access Phantom Ethereum provider');
-                    }
-
-                    // Request accounts
                     const accounts = await phantomProvider.request({
                         method: 'eth_requestAccounts'
-                    }).catch(err => {
-                        throw new Error(`Connection rejected: ${err.message}`);
                     });
-
-                    if (!accounts || accounts.length === 0) {
-                        throw new Error('No accounts returned');
-                    }
 
                     const ethersProvider = new ethers.providers.Web3Provider(phantomProvider);
                     const signer = ethersProvider.getSigner();
@@ -217,30 +278,14 @@
                     setUserAddress(address);
                     setWalletProviderType('phantom');
 
-                    // Initialize contracts
                     const atm = new ethers.Contract(atmContractAddress, atmABI, signer);
                     const usdc = new ethers.Contract(usdcContractAddress, usdcABI, signer);
 
                     setAtmContract(atm);
                     setUsdcContract(usdc);
 
-                    // Set up event listeners
-                    phantomProvider.on("accountsChanged", (accounts) => {
-                        if (accounts.length === 0) {
-                            disconnectWallet();
-                        } else {
-                            setUserAddress(accounts[0]);
-                        }
-                    });
-
-                    phantomProvider.on("chainChanged", () => {
-                        window.location.reload();
-                    });
-
-                    // Load initial data
                     await fetchData(atm, usdc, address);
-
-                    addNotification('Phantom wallet connected successfully');
+                    addNotification('Phantom connected successfully');
 
                 } catch (error) {
                     console.error("Phantom connection error:", error);
@@ -372,16 +417,19 @@
                             <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
                                 <button
                                     onClick={connectMetaMask}
-                                    className="bg-gradient-to-r from-blue-500 to-purple-500 text-white py-3 px-6 rounded-md hover:from-blue-600 hover:to-purple-600 transition-colors shadow-lg hover:shadow-xl flex items-center"
+                                    className="wallet-button bg-gradient-to-r from-blue-500 to-purple-500 text-white py-3 px-6 rounded-md hover:from-blue-600 hover:to-purple-600 transition-colors shadow-lg hover:shadow-xl flex items-center justify-center"
                                 >
-                                    <i className="fab fa-ethereum mr-2"></i>Connect MetaMask
+                                    <i className="fab fa-ethereum mr-2"></i>
+                                    {isMobile() ? 'Open in MetaMask' : 'Connect MetaMask'}
                                 </button>
-                                {isPhantomAvailable() && (
+
+                                {(isMobile() || isPhantomAvailable()) && (
                                     <button
                                         onClick={connectPhantom}
-                                        className="bg-gradient-to-r from-purple-500 to-pink-500 text-white py-3 px-6 rounded-md hover:from-purple-600 hover:to-pink-600 transition-colors shadow-lg hover:shadow-xl flex items-center"
+                                        className="wallet-button bg-gradient-to-r from-purple-500 to-pink-500 text-white py-3 px-6 rounded-md hover:from-purple-600 hover:to-pink-600 transition-colors shadow-lg hover:shadow-xl flex items-center justify-center"
                                     >
-                                        <i className="fas fa-wallet mr-2"></i>Connect Phantom
+                                        <i className="fas fa-wallet mr-2"></i>
+                                        {isMobile() ? 'Open in Phantom' : 'Connect Phantom'}
                                     </button>
                                 )}
                             </div>

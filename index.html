@@ -66,70 +66,44 @@
     <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
 
-    <!-- WalletConnect v0.7.28 from specified CDN with fallback -->
-    <script
-        src="https://cdn.jsdelivr.net/npm/walletconnect-web3-provider@0.7.28/dist/walletconnect-web3-provider.min.js"></script>
-    <script>
-        if (typeof WalletConnectProvider === 'undefined') {
-            document.write('<script src="https://unpkg.com/walletconnect-web3-provider@0.7.28/dist/umd/index.min.js"><\/script>');
-        }
-    </script>
-
-    <!-- QR Code Modal (required by WalletConnect) -->
-    <script src="https://unpkg.com/@walletconnect/qrcode-modal@0.9.7/dist/umd/index.min.js"></script>
-
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
 
-        const getChainId = (networkName) => {
-            switch (networkName.toLowerCase()) {
-                case 'base': return 8453;
-                case 'mainnet': return 1;
-                default: return 8453;
-            }
-        };
-
-        const Notification = ({ message, type }) => {
-            return (
-                <div className={`notification p-4 rounded-md shadow-lg ${type === 'success' ? 'bg-green-800 border-green-700' : 'bg-red-800 border-red-700'
-                    }`}>
-                    <div className="flex items-center">
-                        {type === 'success' ? (
-                            <i className="fas fa-check-circle mr-2"></i>
-                        ) : (
-                            <i className="fas fa-exclamation-circle mr-2"></i>
-                        )}
-                        <span>{message}</span>
-                    </div>
+        const Notification = ({ message, type }) => (
+            <div className={`notification p-4 rounded-md shadow-lg ${type === 'success' ? 'bg-green-800 border-green-700' : 'bg-red-800 border-red-700'}`}>
+                <div className="flex items-center">
+                    {type === 'success' ? (
+                        <i className="fas fa-check-circle mr-2"></i>
+                    ) : (
+                        <i className="fas fa-exclamation-circle mr-2"></i>
+                    )}
+                    <span>{message}</span>
                 </div>
-            );
-        };
+            </div>
+        );
 
         const RewardsComponent = () => {
+            // State variables
             const [provider, setProvider] = useState(null);
             const [signer, setSigner] = useState(null);
-            const [atmContract, setAtmContract] = useState(null);
-            const [rewardContract, setRewardContract] = useState(null);
             const [userAddress, setUserAddress] = useState('');
             const [atmBalance, setAtmBalance] = useState('');
             const [rewardBalance, setRewardBalance] = useState('');
             const [unclaimedRewards, setUnclaimedRewards] = useState('');
-            const [loading, setLoading] = useState(true);
+            const [loading, setLoading] = useState(false);
             const [error, setError] = useState(null);
+            const [notifications, setNotifications] = useState([]);
+            const [atmContract, setAtmContract] = useState(null);
+            const [rewardContract, setRewardContract] = useState(null);
             const [rewardTokenName, setRewardTokenName] = useState('');
             const [rewardTokenSymbol, setRewardTokenSymbol] = useState('');
-            const [rewardTokenDecimals, setRewardTokenDecimals] = useState(0);
-            const [walletConnected, setWalletConnected] = useState(false);
+            const [rewardTokenDecimals, setRewardTokenDecimals] = useState(18);
             const [pendingRewards, setPendingRewards] = useState(0);
             const [claimedRewards, setClaimedRewards] = useState(0);
             const [nextClaimTime, setNextClaimTime] = useState(0);
-            const [minPeriod, setMinPeriod] = useState(420);
-            const [networkName, setNetworkName] = useState('base');
-            const [chainId, setChainId] = useState(getChainId(networkName));
             const [walletProviderType, setWalletProviderType] = useState(null);
-            const [notifications, setNotifications] = useState([]);
-            const baseInfuraUrl = 'https://base-mainnet.infura.io/v3/d1d90e62ee284811874e2a0a737ed963';
 
+            // Contract details
             const atmABI = [
                 "function balanceOf(address account) external view returns (uint256)",
                 "function decimals() external view returns (uint8)",
@@ -149,6 +123,7 @@
             const atmContractAddress = '0x88807fDabF60fdDd7bd8fB4987dC5A63cbd31f6a';
             const rewardTokenAddress = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
+            // Add notification helper
             const addNotification = (message, type = 'success') => {
                 const id = Date.now();
                 setNotifications(prev => [...prev, { id, message, type }]);
@@ -157,215 +132,162 @@
                 }, 3500);
             };
 
-            const initProvider = useCallback(async (selectedProvider = 'metamask') => {
-                let ethersProvider;
+            // Connect with MetaMask
+            const connectMetaMask = async () => {
                 try {
                     setLoading(true);
                     setError(null);
 
-                    if (selectedProvider === 'metamask') {
-                        if (!window.ethereum) {
-                            throw new Error('MetaMask not detected. Please install the extension or use WalletConnect.');
-                        }
-
-                        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-                        if (accounts.length === 0) {
-                            await window.ethereum.request({ method: 'eth_requestAccounts' });
-                        }
-
-                        ethersProvider = new ethers.providers.Web3Provider(window.ethereum);
-                        setWalletProviderType('metamask');
-                        addNotification('MetaMask connected successfully');
-
-                    } else if (selectedProvider === 'walletconnect') {
-                        if (typeof WalletConnectProvider === 'undefined') {
-                            throw new Error('WalletConnect provider not loaded. Please refresh the page.');
-                        }
-
-                        const walletConnectProvider = new WalletConnectProvider.default({
-                            rpc: {
-                                8453: baseInfuraUrl,
-                                1: "https://mainnet.infura.io/v3/d1d90e62ee284811874e2a0a737ed963"
-                            },
-                            bridge: "https://bridge.walletconnect.org",
-                            qrcode: true,
-                            qrcodeModalOptions: {
-                                mobileLinks: ["metamask", "trust", "rainbow", "argent"],
-                                desktopLinks: ["metamask"],
-                                walletImages: {
-                                    metamask: "https://metamask.io/images/favicon-32x32.png",
-                                    trust: "https://trustwallet.com/assets/images/favicon.png"
-                                }
-                            }
-                        });
-
-                        await walletConnectProvider.enable();
-                        ethersProvider = new ethers.providers.Web3Provider(walletConnectProvider);
-                        setWalletProviderType('walletconnect');
-                        addNotification('WalletConnect connected successfully');
-                    } else {
-                        throw new Error('Invalid wallet provider selected');
+                    if (!window.ethereum) {
+                        throw new Error('MetaMask not detected. Please install the extension.');
                     }
 
-                    setProvider(ethersProvider);
-                    return ethersProvider;
-
-                } catch (err) {
-                    console.error("Wallet connection error:", err);
-                    setError(err.message);
-                    addNotification(err.message, 'error');
-                    setWalletConnected(false);
-                    return null;
-                } finally {
-                    setLoading(false);
-                }
-            }, []);
-
-            const initSigner = useCallback(async (ethersProvider) => {
-                if (!ethersProvider) return null;
-                try {
+                    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                    const ethersProvider = new ethers.providers.Web3Provider(window.ethereum);
                     const signer = ethersProvider.getSigner();
                     const address = await signer.getAddress();
+
+                    setProvider(ethersProvider);
                     setSigner(signer);
                     setUserAddress(address);
-                    setWalletConnected(true);
-                    return signer;
-                } catch (err) {
-                    console.error("Signer init error:", err);
-                    setError("Failed to get wallet address");
-                    addNotification("Failed to connect wallet", 'error');
-                    setLoading(false);
-                    return null;
-                }
-            }, []);
+                    setWalletProviderType('metamask');
 
-            const initContracts = useCallback(async (signerInstance) => {
-                if (!signerInstance) return;
-
-                try {
-                    const atm = new ethers.Contract(atmContractAddress, atmABI, signerInstance);
-                    const reward = new ethers.Contract(rewardTokenAddress, rewardTokenABI, signerInstance);
+                    // Initialize contracts
+                    const atm = new ethers.Contract(atmContractAddress, atmABI, signer);
+                    const reward = new ethers.Contract(rewardTokenAddress, rewardTokenABI, signer);
 
                     setAtmContract(atm);
                     setRewardContract(reward);
 
-                    const [rName, rSymbol, rDecimals] = await Promise.all([
+                    // Get token info
+                    const [name, symbol, decimals] = await Promise.all([
                         reward.name(),
                         reward.symbol(),
                         reward.decimals()
                     ]);
 
-                    setRewardTokenName(rName);
-                    setRewardTokenSymbol(rSymbol);
-                    setRewardTokenDecimals(rDecimals);
+                    setRewardTokenName(name);
+                    setRewardTokenSymbol(symbol);
+                    setRewardTokenDecimals(decimals);
 
-                    return { atm, reward };
-                } catch (err) {
-                    console.error("Contract init error:", err);
-                    setError("Failed to initialize contracts");
-                    addNotification("Failed to initialize contracts", 'error');
-                    return null;
-                }
-            }, []);
+                    // Set up event listeners
+                    window.ethereum.on("accountsChanged", (accounts) => {
+                        setUserAddress(accounts[0]);
+                    });
 
-            const fetchData = useCallback(async (atm, reward) => {
-                if (!atm || !reward || !userAddress) return;
+                    window.ethereum.on("chainChanged", () => {
+                        window.location.reload();
+                    });
 
-                setLoading(true);
-                try {
-                    const [
-                        atmBal,
-                        rewardBal,
-                        rewards,
-                        claimed,
-                        nextClaim
-                    ] = await Promise.all([
-                        atm.balanceOf(userAddress),
-                        reward.balanceOf(userAddress),
-                        atm.getUnpaidEarnings(userAddress).catch(() => ethers.BigNumber.from(0)),
-                        atm.totalRewardsDistributed(userAddress).catch(() => ethers.BigNumber.from(0)),
-                        atm.getNextClaimTime(userAddress).catch(() => ethers.BigNumber.from(0))
-                    ]);
+                    addNotification('MetaMask connected successfully');
 
-                    setAtmBalance(ethers.utils.formatUnits(atmBal, await atm.decimals()));
-                    setRewardBalance(ethers.utils.formatUnits(rewardBal, rewardTokenDecimals));
-                    setUnclaimedRewards(ethers.utils.formatUnits(rewards, rewardTokenDecimals));
-                    setPendingRewards(ethers.utils.formatUnits(rewards, rewardTokenDecimals));
-                    setClaimedRewards(ethers.utils.formatUnits(claimed, rewardTokenDecimals));
-                    setNextClaimTime(nextClaim.toNumber());
-                    setError(null);
-                } catch (err) {
-                    console.error("Data fetch error:", err);
-                    setError("Failed to fetch data. Please try again.");
-                    addNotification("Failed to fetch data", 'error');
-                } finally {
-                    setLoading(false);
-                }
-            }, [userAddress, rewardTokenDecimals]);
+                    // Load initial data
+                    await fetchData(atm, reward, address, decimals);
 
-            useEffect(() => {
-                const initialize = async () => {
-                    if (walletConnected && provider) {
-                        const signerInstance = await initSigner(provider);
-                        if (signerInstance) {
-                            const contracts = await initContracts(signerInstance);
-                            if (contracts) {
-                                await fetchData(contracts.atm, contracts.reward);
-                            }
-                        }
-                    }
-                };
-                initialize();
-            }, [walletConnected, provider, initSigner, initContracts, fetchData]);
-
-            useEffect(() => {
-                const checkConnection = async () => {
-                    if (window.ethereum) {
-                        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-                        if (accounts.length > 0) {
-                            const ethersProvider = new ethers.providers.Web3Provider(window.ethereum);
-                            setProvider(ethersProvider);
-                            setWalletProviderType('metamask');
-                            const signerInstance = ethersProvider.getSigner();
-                            setSigner(signerInstance);
-                            setUserAddress(accounts[0]);
-                            setWalletConnected(true);
-                            addNotification('Wallet reconnected automatically');
-                        }
-                    }
-                };
-                checkConnection();
-            }, []);
-
-            const connectWallet = async (providerType) => {
-                setLoading(true);
-                setError(null);
-                try {
-                    const ethersProvider = await initProvider(providerType);
-                    if (ethersProvider) {
-                        await initSigner(ethersProvider);
-                    }
-                } catch (err) {
-                    setError(err.message);
-                    addNotification(err.message, 'error');
+                } catch (error) {
+                    console.error("MetaMask connection error:", error);
+                    setError(error.message);
+                    addNotification(error.message, 'error');
                 } finally {
                     setLoading(false);
                 }
             };
 
+            // Connect with WalletConnect
+            const connectWalletConnect = async () => {
+                try {
+                    setLoading(true);
+                    setError(null);
+
+                    // Create a new WalletConnect provider
+                    const walletConnectProvider = new WalletConnectProvider.default({
+                        rpc: {
+                            8453: 'https://base-mainnet.infura.io/v3/d1d90e62ee284811874e2a0a737ed963',
+                            1: 'https://mainnet.infura.io/v3/d1d90e62ee284811874e2a0a737ed963'
+                        },
+                        bridge: "https://bridge.walletconnect.org",
+                        qrcodeModal: {
+                            open: (uri, cb) => {
+                                // You can implement your own QR code modal here
+                                // For simplicity, we'll just log the URI
+                                console.log("WalletConnect URI:", uri);
+                                addNotification('Scan QR code with your wallet app');
+                            },
+                            close: () => { }
+                        }
+                    });
+
+                    // Enable session (triggers QR code modal)
+                    await walletConnectProvider.enable();
+
+                    const ethersProvider = new ethers.providers.Web3Provider(walletConnectProvider);
+                    const signer = ethersProvider.getSigner();
+                    const address = await signer.getAddress();
+
+                    setProvider(ethersProvider);
+                    setSigner(signer);
+                    setUserAddress(address);
+                    setWalletProviderType('walletconnect');
+
+                    // Initialize contracts
+                    const atm = new ethers.Contract(atmContractAddress, atmABI, signer);
+                    const reward = new ethers.Contract(rewardTokenAddress, rewardTokenABI, signer);
+
+                    setAtmContract(atm);
+                    setRewardContract(reward);
+
+                    // Get token info
+                    const [name, symbol, decimals] = await Promise.all([
+                        reward.name(),
+                        reward.symbol(),
+                        reward.decimals()
+                    ]);
+
+                    setRewardTokenName(name);
+                    setRewardTokenSymbol(symbol);
+                    setRewardTokenDecimals(decimals);
+
+                    // Set up event listeners
+                    walletConnectProvider.on("accountsChanged", (accounts) => {
+                        setUserAddress(accounts[0]);
+                    });
+
+                    walletConnectProvider.on("chainChanged", () => {
+                        window.location.reload();
+                    });
+
+                    walletConnectProvider.on("disconnect", () => {
+                        disconnectWallet();
+                    });
+
+                    addNotification('WalletConnect connected successfully');
+
+                    // Load initial data
+                    await fetchData(atm, reward, address, decimals);
+
+                } catch (error) {
+                    console.error("WalletConnect error:", error);
+                    setError(error.message);
+                    addNotification(error.message, 'error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            // Disconnect wallet
             const disconnectWallet = async () => {
                 try {
                     if (walletProviderType === 'walletconnect' && provider?.provider?.disconnect) {
                         await provider.provider.disconnect();
                     }
+
                     setProvider(null);
                     setSigner(null);
+                    setUserAddress('');
                     setAtmContract(null);
                     setRewardContract(null);
-                    setUserAddress('');
-                    setWalletConnected(false);
                     setWalletProviderType(null);
-                    setError(null);
+
                     addNotification('Wallet disconnected');
                 } catch (err) {
                     console.error("Disconnect error:", err);
@@ -374,21 +296,56 @@
                 }
             };
 
-            const handleClaimRewards = async () => {
-                if (!atmContract) {
-                    setError('Contract not initialized');
-                    addNotification('Contract not initialized', 'error');
-                    return;
+            // Fetch contract data
+            const fetchData = async (atm, reward, address, decimals) => {
+                try {
+                    setLoading(true);
+
+                    const [
+                        atmBal,
+                        rewardBal,
+                        rewards,
+                        claimed,
+                        nextClaim
+                    ] = await Promise.all([
+                        atm.balanceOf(address),
+                        reward.balanceOf(address),
+                        atm.getUnpaidEarnings(address).catch(() => ethers.BigNumber.from(0)),
+                        atm.totalRewardsDistributed(address).catch(() => ethers.BigNumber.from(0)),
+                        atm.getNextClaimTime(address).catch(() => ethers.BigNumber.from(0))
+                    ]);
+
+                    setAtmBalance(ethers.utils.formatUnits(atmBal, await atm.decimals()));
+                    setRewardBalance(ethers.utils.formatUnits(rewardBal, decimals));
+                    setUnclaimedRewards(ethers.utils.formatUnits(rewards, decimals));
+                    setPendingRewards(ethers.utils.formatUnits(rewards, decimals));
+                    setClaimedRewards(ethers.utils.formatUnits(claimed, decimals));
+                    setNextClaimTime(nextClaim.toNumber());
+
+                } catch (err) {
+                    console.error("Data fetch error:", err);
+                    setError("Failed to fetch data");
+                    addNotification("Failed to fetch data", 'error');
+                } finally {
+                    setLoading(false);
                 }
+            };
+
+            // Claim rewards
+            const handleClaimRewards = async () => {
+                if (!atmContract) return;
+
                 try {
                     setLoading(true);
                     const tx = await atmContract._claimDividend();
                     addNotification('Transaction submitted. Waiting for confirmation...');
+
                     await tx.wait();
                     addNotification(`Successfully claimed ${unclaimedRewards} ${rewardTokenSymbol}!`);
 
+                    // Refresh data
                     if (atmContract && rewardContract && userAddress) {
-                        await fetchData(atmContract, rewardContract);
+                        await fetchData(atmContract, rewardContract, userAddress, rewardTokenDecimals);
                     }
                 } catch (err) {
                     console.error("Claim error:", err);
@@ -399,15 +356,21 @@
                 }
             };
 
+            // Check if already connected on page load
+            useEffect(() => {
+                const checkConnection = async () => {
+                    if (window.ethereum && window.ethereum.selectedAddress) {
+                        await connectMetaMask();
+                    }
+                };
+                checkConnection();
+            }, []);
+
             return (
                 <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8">
                     {/* Notifications */}
                     {notifications.map(notification => (
-                        <Notification
-                            key={notification.id}
-                            message={notification.message}
-                            type={notification.type}
-                        />
+                        <Notification key={notification.id} message={notification.message} type={notification.type} />
                     ))}
 
                     <div className="max-w-4xl mx-auto space-y-6">
@@ -421,16 +384,16 @@
                             </div>
                         )}
 
-                        {!walletConnected ? (
+                        {!userAddress ? (
                             <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
                                 <button
-                                    onClick={() => connectWallet('metamask')}
+                                    onClick={connectMetaMask}
                                     className="bg-gradient-to-r from-blue-500 to-purple-500 text-white py-3 px-6 rounded-md hover:from-blue-600 hover:to-purple-600 transition-colors shadow-lg hover:shadow-xl flex items-center"
                                 >
                                     <i className="fab fa-ethereum mr-2"></i>Connect MetaMask
                                 </button>
                                 <button
-                                    onClick={() => connectWallet('walletconnect')}
+                                    onClick={connectWalletConnect}
                                     className="bg-gradient-to-r from-green-500 to-teal-500 text-white py-3 px-6 rounded-md hover:from-green-600 hover:to-teal-600 transition-colors shadow-lg hover:shadow-xl flex items-center"
                                 >
                                     <i className="fas fa-wallet mr-2"></i>Connect WalletConnect
@@ -447,7 +410,7 @@
                             </div>
                         )}
 
-                        {loading && walletConnected && (
+                        {loading && userAddress && (
                             <div className="space-y-4">
                                 <div className="skeleton h-10 w-full rounded-md"></div>
                                 <div className="skeleton h-8 w-3/4 rounded-md"></div>
@@ -456,7 +419,7 @@
                             </div>
                         )}
 
-                        {walletConnected && !loading && (
+                        {userAddress && !loading && (
                             <div className="space-y-6">
                                 <div className="bg-gray-800 border-gray-700 shadow-lg rounded-md p-6">
                                     <h2 className="text-xl sm:text-2xl font-semibold text-white mb-4">
@@ -539,6 +502,36 @@
         };
 
         ReactDOM.render(<RewardsComponent />, document.getElementById('root'));
+    </script>
+
+    <!-- Load WalletConnect provider after the React app is rendered -->
+    <script>
+        function loadWalletConnect() {
+            return new Promise((resolve, reject) => {
+                if (typeof WalletConnectProvider !== 'undefined') {
+                    resolve();
+                    return;
+                }
+
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/@walletconnect/web3-provider@1.8.0/dist/umd/index.min.js';
+                script.onload = () => {
+                    if (typeof WalletConnectProvider !== 'undefined') {
+                        resolve();
+                    } else {
+                        reject(new Error('WalletConnect provider not loaded'));
+                    }
+                };
+                script.onerror = () => {
+                    reject(new Error('Failed to load WalletConnect script'));
+                };
+                document.body.appendChild(script);
+            });
+        }
+
+        loadWalletConnect().catch(err => {
+            console.error('Error loading WalletConnect:', err);
+        });
     </script>
 </body>
 

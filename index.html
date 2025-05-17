@@ -59,12 +59,14 @@
 
 <body class="bg-gray-900 text-white font-inter">
     <div id="root"></div>
+
     <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+
     <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
+        const { useState, useEffect } = React;
 
         const Notification = ({ message, type }) => (
             <div className={`notification p-4 rounded-md shadow-lg ${type === 'success' ? 'bg-green-800 border-green-700' : 'bg-red-800 border-red-700'}`}>
@@ -99,7 +101,6 @@
             const [claimedRewards, setClaimedRewards] = useState(0);
             const [nextClaimTime, setNextClaimTime] = useState(0);
             const [walletProviderType, setWalletProviderType] = useState(null);
-            const [walletConnectProvider, setWalletConnectProviderInstance] = useState(null); // Hold the instance
 
             // Contract details
             const atmABI = [
@@ -120,7 +121,11 @@
 
             const atmContractAddress = '0x88807fDabF60fdDd7bd8fB4987dC5A63cbd31f6a';
             const rewardTokenAddress = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-            const infuraId = 'YOUR_INFURA_ID'; // Replace with your actual Infura ID or another RPC provider
+
+            // Check if Phantom is available
+            const isPhantomAvailable = () => {
+                return !!window.phantom?.ethereum;
+            };
 
             // Add notification helper
             const addNotification = (message, type = 'success') => {
@@ -192,42 +197,26 @@
                 }
             };
 
-            // Connect with WalletConnect
-            const connectWalletConnect = async () => {
+            // Connect with Phantom
+            const connectPhantom = async () => {
                 try {
                     setLoading(true);
                     setError(null);
 
-                    // Use a direct script import and access the global object
-                    const provider = new window.WalletConnectProvider.default({
-                        rpc: {
-                            8453: `https://base-mainnet.infura.io/v3/${infuraId}`,
-                            1: `https://mainnet.infura.io/v3/${infuraId}`
-                        },
-                        bridge: 'https://bridge.walletconnect.org',
-                        qrcodeModalOptions: {
-                            open: (uri, cb) => {
-                                console.log("WalletConnect URI:", uri);
-                                addNotification('Scan QR code with your wallet app');
-                            },
-                            close: () => { },
-                        },
-                    });
+                    if (!isPhantomAvailable()) {
+                        throw new Error('Phantom (EVM) not detected. Please install the extension and enable Ethereum support.');
+                    }
 
-
-                    setWalletConnectProviderInstance(provider);
-
-                    // Enable session
-                    await provider.enable();
-
-                    const ethersProvider = new ethers.providers.Web3Provider(provider);
+                    // Connect to Phantom's Ethereum provider
+                    const accounts = await window.phantom.ethereum.request({ method: 'eth_requestAccounts' });
+                    const ethersProvider = new ethers.providers.Web3Provider(window.phantom.ethereum);
                     const signer = ethersProvider.getSigner();
                     const address = await signer.getAddress();
 
                     setProvider(ethersProvider);
                     setSigner(signer);
                     setUserAddress(address);
-                    setWalletProviderType('walletconnect');
+                    setWalletProviderType('phantom');
 
                     // Initialize contracts
                     const atm = new ethers.Contract(atmContractAddress, atmABI, signer);
@@ -248,25 +237,23 @@
                     setRewardTokenDecimals(decimals);
 
                     // Set up event listeners
-                    provider.on('accountsChanged', (accounts) => {
+                    window.phantom.ethereum.on("accountsChanged", (accounts) => {
                         setUserAddress(accounts[0]);
                     });
 
-                    provider.on('chainChanged', () => {
+                    window.phantom.ethereum.on("chainChanged", () => {
                         window.location.reload();
                     });
 
-                    provider.on('disconnect', () => {
-                        disconnectWallet();
-                    });
+                    addNotification('Phantom (EVM) connected successfully');
 
-                    addNotification('WalletConnect connected successfully.');
+                    // Load initial data
                     await fetchData(atm, reward, address, decimals);
+
                 } catch (error) {
-                    console.error('WalletConnect Error:', error);
+                    console.error("Phantom connection error:", error);
                     setError(error.message);
                     addNotification(error.message, 'error');
-                    setLoading(false);
                 } finally {
                     setLoading(false);
                 }
@@ -275,10 +262,10 @@
             // Disconnect wallet
             const disconnectWallet = async () => {
                 try {
-                    if (walletProviderType === 'walletconnect' && walletConnectProviderInstance) {
-                        await walletConnectProviderInstance.disconnect();
+                    if (walletProviderType === 'phantom' && window.phantom?.ethereum?.close) {
+                        await window.phantom.ethereum.close();
                     }
-                    setWalletConnectProviderInstance(null);
+
                     setProvider(null);
                     setSigner(null);
                     setUserAddress('');
@@ -359,11 +346,8 @@
                 const checkConnection = async () => {
                     if (window.ethereum && window.ethereum.selectedAddress) {
                         await connectMetaMask();
-                    }
-                    //  Attempt to use WalletConnect if it was previously connected
-                    //  This is important for persistence across page reloads
-                    if (typeof window !== 'undefined' && window.localStorage.getItem('walletconnect')) {
-                        await connectWalletConnect();
+                    } else if (window.phantom?.ethereum && window.phantom.ethereum.selectedAddress) {
+                        await connectPhantom();
                     }
                 };
                 checkConnection();
@@ -395,22 +379,13 @@
                                 >
                                     <i className="fab fa-ethereum mr-2"></i>Connect MetaMask
                                 </button>
-                                <button
-                                    onClick={connectWalletConnect}
-                                    className="bg-gradient-to-r from-green-500 to-teal-500 text-white py-3 px-6 rounded-md hover:from-green-600 hover:to-teal-600 transition-colors shadow-lg hover:shadow-xl flex items-center"
-                                >
-                                    <i className="fas fa-wallet mr-2"></i>Connect WalletConnect
-                                </button>
-                                {error && error.includes("WalletConnect") && (
-                                    <div className="text-red-400 mt-2 text-center">
-                                        <p>Having trouble connecting with WalletConnect?</p>
-                                        <ul className="list-disc pl-5">
-                                            <li>Check your internet connection.</li>
-                                            <li>Ensure your wallet app is running and supports WalletConnect.</li>
-                                            <li>Try again in a few minutes, as the WalletConnect bridge might be temporarily unavailable.</li>
-                                            <li>If the problem persists, try connecting with MetaMask.</li>
-                                        </ul>
-                                    </div>
+                                {isPhantomAvailable() && (
+                                    <button
+                                        onClick={connectPhantom}
+                                        className="bg-gradient-to-r from-purple-500 to-pink-500 text-white py-3 px-6 rounded-md hover:from-purple-600 hover:to-pink-600 transition-colors shadow-lg hover:shadow-xl flex items-center"
+                                    >
+                                        <i className="fas fa-wallet mr-2"></i>Connect Phantom
+                                    </button>
                                 )}
                             </div>
                         ) : (
@@ -443,6 +418,10 @@
                                         <div>
                                             <span className="font-medium">Your Address:</span>
                                             <span className="font-mono text-sm break-all ml-2 text-gray-400">{userAddress}</span>
+                                        </div>
+                                        <div>
+                                            <span className="font-medium">Connected with:</span>
+                                            <span className="ml-2 capitalize text-blue-400">{walletProviderType}</span>
                                         </div>
                                         <div>
                                             <span className="font-medium">ATM Balance:</span>
@@ -490,9 +469,9 @@
                                             onClick={handleClaimRewards}
                                             disabled={loading || Number(unclaimedRewards) <= 0 || nextClaimTime > Date.now() / 1000}
                                             className={`w-full bg-gradient-to-r from-purple-500 to-blue-500 text-white py-3 sm:py-4
-                                                rounded-md hover:from-purple-600 hover:to-blue-600 transition-colors
-                                                disabled:opacity-50 disabled:cursor-not-allowed
-                                                shadow-lg hover:shadow-xl flex items-center justify-center`}
+                                            rounded-md hover:from-purple-600 hover:to-blue-600 transition-colors
+                                            disabled:opacity-50 disabled:cursor-not-allowed
+                                            shadow-lg hover:shadow-xl flex items-center justify-center`}
                                         >
                                             {loading ? (
                                                 <>
@@ -517,7 +496,6 @@
 
         ReactDOM.render(<RewardsComponent />, document.getElementById('root'));
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/@walletconnect/web3-provider@1.8.0/dist/umd/index.min.js"></script>
 </body>
 
 </html>

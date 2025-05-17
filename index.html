@@ -87,22 +87,19 @@
             const [signer, setSigner] = useState(null);
             const [userAddress, setUserAddress] = useState('');
             const [atmBalance, setAtmBalance] = useState('');
-            const [rewardBalance, setRewardBalance] = useState('');
+            const [usdcBalance, setUsdcBalance] = useState('');
             const [unclaimedRewards, setUnclaimedRewards] = useState('');
             const [loading, setLoading] = useState(false);
             const [error, setError] = useState(null);
             const [notifications, setNotifications] = useState([]);
             const [atmContract, setAtmContract] = useState(null);
-            const [rewardContract, setRewardContract] = useState(null);
-            const [rewardTokenName, setRewardTokenName] = useState('');
-            const [rewardTokenSymbol, setRewardTokenSymbol] = useState('');
-            const [rewardTokenDecimals, setRewardTokenDecimals] = useState(18);
+            const [usdcContract, setUsdcContract] = useState(null);
             const [pendingRewards, setPendingRewards] = useState(0);
             const [claimedRewards, setClaimedRewards] = useState(0);
             const [nextClaimTime, setNextClaimTime] = useState(0);
             const [walletProviderType, setWalletProviderType] = useState(null);
 
-            // Contract details
+            // Contract details - USDC on Base
             const atmABI = [
                 "function balanceOf(address account) external view returns (uint256)",
                 "function decimals() external view returns (uint8)",
@@ -112,19 +109,19 @@
                 "function getNextClaimTime(address account) external view returns (uint256)"
             ];
 
-            const rewardTokenABI = [
-                "function name() external view returns (string memory)",
-                "function symbol() external view returns (string memory)",
+            const usdcABI = [
                 "function balanceOf(address account) external view returns (uint256)",
-                "function decimals() external view returns (uint8)"
+                "function decimals() external view returns (uint8)",
+                "function name() external view returns (string memory)",
+                "function symbol() external view returns (string memory)"
             ];
 
             const atmContractAddress = '0x88807fDabF60fdDd7bd8fB4987dC5A63cbd31f6a';
-            const rewardTokenAddress = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+            const usdcContractAddress = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // USDC on Base
 
             // Check if Phantom is available
             const isPhantomAvailable = () => {
-                return !!window.phantom?.ethereum;
+                return !!window.phantom?.ethereum || !!window.ethereum?.isPhantom;
             };
 
             // Add notification helper
@@ -146,6 +143,11 @@
                         throw new Error('MetaMask not detected. Please install the extension.');
                     }
 
+                    // Check if Phantom is overriding window.ethereum
+                    if (window.ethereum.isPhantom) {
+                        throw new Error('Phantom detected. Please connect with Phantom instead.');
+                    }
+
                     const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
                     const ethersProvider = new ethers.providers.Web3Provider(window.ethereum);
                     const signer = ethersProvider.getSigner();
@@ -158,35 +160,15 @@
 
                     // Initialize contracts
                     const atm = new ethers.Contract(atmContractAddress, atmABI, signer);
-                    const reward = new ethers.Contract(rewardTokenAddress, rewardTokenABI, signer);
+                    const usdc = new ethers.Contract(usdcContractAddress, usdcABI, signer);
 
                     setAtmContract(atm);
-                    setRewardContract(reward);
-
-                    // Get token info
-                    const [name, symbol, decimals] = await Promise.all([
-                        reward.name(),
-                        reward.symbol(),
-                        reward.decimals()
-                    ]);
-
-                    setRewardTokenName(name);
-                    setRewardTokenSymbol(symbol);
-                    setRewardTokenDecimals(decimals);
-
-                    // Set up event listeners
-                    window.ethereum.on("accountsChanged", (accounts) => {
-                        setUserAddress(accounts[0]);
-                    });
-
-                    window.ethereum.on("chainChanged", () => {
-                        window.location.reload();
-                    });
-
-                    addNotification('MetaMask connected successfully');
+                    setUsdcContract(usdc);
 
                     // Load initial data
-                    await fetchData(atm, reward, address, decimals);
+                    await fetchData(atm, usdc, address);
+
+                    addNotification('MetaMask connected successfully');
 
                 } catch (error) {
                     console.error("MetaMask connection error:", error);
@@ -204,12 +186,29 @@
                     setError(null);
 
                     if (!isPhantomAvailable()) {
-                        throw new Error('Phantom (EVM) not detected. Please install the extension and enable Ethereum support.');
+                        throw new Error('Phantom wallet not detected or Ethereum support not enabled.');
                     }
 
-                    // Connect to Phantom's Ethereum provider
-                    const accounts = await window.phantom.ethereum.request({ method: 'eth_requestAccounts' });
-                    const ethersProvider = new ethers.providers.Web3Provider(window.phantom.ethereum);
+                    // Get the correct provider instance
+                    const phantomProvider = window.phantom?.ethereum ||
+                        (window.ethereum?.isPhantom ? window.ethereum : null);
+
+                    if (!phantomProvider) {
+                        throw new Error('Could not access Phantom Ethereum provider');
+                    }
+
+                    // Request accounts
+                    const accounts = await phantomProvider.request({
+                        method: 'eth_requestAccounts'
+                    }).catch(err => {
+                        throw new Error(`Connection rejected: ${err.message}`);
+                    });
+
+                    if (!accounts || accounts.length === 0) {
+                        throw new Error('No accounts returned');
+                    }
+
+                    const ethersProvider = new ethers.providers.Web3Provider(phantomProvider);
                     const signer = ethersProvider.getSigner();
                     const address = await signer.getAddress();
 
@@ -220,35 +219,28 @@
 
                     // Initialize contracts
                     const atm = new ethers.Contract(atmContractAddress, atmABI, signer);
-                    const reward = new ethers.Contract(rewardTokenAddress, rewardTokenABI, signer);
+                    const usdc = new ethers.Contract(usdcContractAddress, usdcABI, signer);
 
                     setAtmContract(atm);
-                    setRewardContract(reward);
-
-                    // Get token info
-                    const [name, symbol, decimals] = await Promise.all([
-                        reward.name(),
-                        reward.symbol(),
-                        reward.decimals()
-                    ]);
-
-                    setRewardTokenName(name);
-                    setRewardTokenSymbol(symbol);
-                    setRewardTokenDecimals(decimals);
+                    setUsdcContract(usdc);
 
                     // Set up event listeners
-                    window.phantom.ethereum.on("accountsChanged", (accounts) => {
-                        setUserAddress(accounts[0]);
+                    phantomProvider.on("accountsChanged", (accounts) => {
+                        if (accounts.length === 0) {
+                            disconnectWallet();
+                        } else {
+                            setUserAddress(accounts[0]);
+                        }
                     });
 
-                    window.phantom.ethereum.on("chainChanged", () => {
+                    phantomProvider.on("chainChanged", () => {
                         window.location.reload();
                     });
 
-                    addNotification('Phantom (EVM) connected successfully');
-
                     // Load initial data
-                    await fetchData(atm, reward, address, decimals);
+                    await fetchData(atm, usdc, address);
+
+                    addNotification('Phantom wallet connected successfully');
 
                 } catch (error) {
                     console.error("Phantom connection error:", error);
@@ -262,15 +254,11 @@
             // Disconnect wallet
             const disconnectWallet = async () => {
                 try {
-                    if (walletProviderType === 'phantom' && window.phantom?.ethereum?.close) {
-                        await window.phantom.ethereum.close();
-                    }
-
                     setProvider(null);
                     setSigner(null);
                     setUserAddress('');
                     setAtmContract(null);
-                    setRewardContract(null);
+                    setUsdcContract(null);
                     setWalletProviderType(null);
 
                     addNotification('Wallet disconnected');
@@ -281,30 +269,33 @@
                 }
             };
 
-            // Fetch contract data
-            const fetchData = async (atm, reward, address, decimals) => {
+            // Fetch contract data with USDC rewards
+            const fetchData = async (atm, usdc, address) => {
                 try {
                     setLoading(true);
 
+                    // Get USDC decimals (standard is 6 for USDC)
+                    const usdcDecimals = await usdc.decimals().catch(() => 6);
+
                     const [
                         atmBal,
-                        rewardBal,
+                        usdcBal,
                         rewards,
                         claimed,
                         nextClaim
                     ] = await Promise.all([
                         atm.balanceOf(address),
-                        reward.balanceOf(address),
+                        usdc.balanceOf(address),
                         atm.getUnpaidEarnings(address).catch(() => ethers.BigNumber.from(0)),
                         atm.totalRewardsDistributed(address).catch(() => ethers.BigNumber.from(0)),
                         atm.getNextClaimTime(address).catch(() => ethers.BigNumber.from(0))
                     ]);
 
-                    setAtmBalance(ethers.utils.formatUnits(atmBal, await atm.decimals()));
-                    setRewardBalance(ethers.utils.formatUnits(rewardBal, decimals));
-                    setUnclaimedRewards(ethers.utils.formatUnits(rewards, decimals));
-                    setPendingRewards(ethers.utils.formatUnits(rewards, decimals));
-                    setClaimedRewards(ethers.utils.formatUnits(claimed, decimals));
+                    setAtmBalance(ethers.utils.formatUnits(atmBal, await atm.decimals().catch(() => 18)));
+                    setUsdcBalance(ethers.utils.formatUnits(usdcBal, usdcDecimals));
+                    setUnclaimedRewards(ethers.utils.formatUnits(rewards, usdcDecimals));
+                    setPendingRewards(ethers.utils.formatUnits(rewards, usdcDecimals));
+                    setClaimedRewards(ethers.utils.formatUnits(claimed, usdcDecimals));
                     setNextClaimTime(nextClaim.toNumber());
 
                 } catch (err) {
@@ -316,7 +307,7 @@
                 }
             };
 
-            // Claim rewards
+            // Claim USDC rewards
             const handleClaimRewards = async () => {
                 if (!atmContract) return;
 
@@ -326,11 +317,11 @@
                     addNotification('Transaction submitted. Waiting for confirmation...');
 
                     await tx.wait();
-                    addNotification(`Successfully claimed ${unclaimedRewards} ${rewardTokenSymbol}!`);
+                    addNotification(`Successfully claimed ${unclaimedRewards} USDC!`);
 
                     // Refresh data
-                    if (atmContract && rewardContract && userAddress) {
-                        await fetchData(atmContract, rewardContract, userAddress, rewardTokenDecimals);
+                    if (atmContract && usdcContract && userAddress) {
+                        await fetchData(atmContract, usdcContract, userAddress);
                     }
                 } catch (err) {
                     console.error("Claim error:", err);
@@ -344,10 +335,16 @@
             // Check if already connected on page load
             useEffect(() => {
                 const checkConnection = async () => {
-                    if (window.ethereum && window.ethereum.selectedAddress) {
-                        await connectMetaMask();
-                    } else if (window.phantom?.ethereum && window.phantom.ethereum.selectedAddress) {
-                        await connectPhantom();
+                    try {
+                        if (window.ethereum) {
+                            if (window.ethereum.isPhantom && window.ethereum.selectedAddress) {
+                                await connectPhantom();
+                            } else if (window.ethereum.selectedAddress) {
+                                await connectMetaMask();
+                            }
+                        }
+                    } catch (error) {
+                        console.error("Auto-connect error:", error);
                     }
                 };
                 checkConnection();
@@ -428,33 +425,33 @@
                                             <span className="ml-2 text-green-400">{atmBalance} ATM</span>
                                         </div>
                                         <div>
-                                            <span className="font-medium">{rewardTokenName} Balance:</span>
-                                            <span className="ml-2 text-blue-400">{rewardBalance} {rewardTokenSymbol}</span>
+                                            <span className="font-medium">USDC Balance:</span>
+                                            <span className="ml-2 text-blue-400">{usdcBalance} USDC</span>
                                         </div>
                                     </div>
                                 </div>
 
                                 <div className="bg-gray-800 border-gray-700 shadow-lg rounded-md p-6">
                                     <h2 className="text-xl sm:text-2xl font-semibold text-white mb-4">
-                                        Rewards
+                                        USDC Rewards
                                     </h2>
                                     <div className="text-gray-300 space-y-4">
                                         <div>
                                             <span className="font-medium">Unclaimed Rewards:</span>
                                             <span className={Number(unclaimedRewards) > 0 ? "ml-2 text-yellow-400" : "ml-2 text-gray-400"}>
-                                                {Number(unclaimedRewards) > 0 ? unclaimedRewards : '0'} {rewardTokenSymbol}
+                                                {Number(unclaimedRewards) > 0 ? unclaimedRewards : '0'} USDC
                                             </span>
                                         </div>
                                         <div>
                                             <span className="font-medium">Pending Rewards:</span>
                                             <span className="ml-2 text-yellow-400">
-                                                {pendingRewards} {rewardTokenSymbol}
+                                                {pendingRewards} USDC
                                             </span>
                                         </div>
                                         <div>
                                             <span className="font-medium">Claimed Rewards:</span>
                                             <span className="ml-2 text-green-400">
-                                                {claimedRewards} {rewardTokenSymbol}
+                                                {claimedRewards} USDC
                                             </span>
                                         </div>
                                         <div>
@@ -479,11 +476,11 @@
                                                     Processing...
                                                 </>
                                             ) : (
-                                                `Claim ${unclaimedRewards} ${rewardTokenSymbol}`
+                                                `Claim ${unclaimedRewards} USDC`
                                             )}
                                         </button>
                                         <div className="text-gray-400 text-sm">
-                                            <span className="font-medium">Note:</span> Rewards are distributed in {rewardTokenName} ({rewardTokenSymbol}).
+                                            <span className="font-medium">Note:</span> Rewards are distributed in USDC.
                                         </div>
                                     </div>
                                 </div>
